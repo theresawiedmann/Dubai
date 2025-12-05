@@ -97,12 +97,12 @@ names(leaders)[names(leaders) == "name"] <- "LeadersName"
 ############################
 
 godad <- read.csv("~/Aid and corruption/Data input/GODAD/projectlevel_china_wb.csv")
-subsetgodad <- subset(godad, select = c("name_0", "paymentyear", "comm", "comm_nominal", "disb", "disb_nominal"))
+subsetgodad <- subset(godad, select = c("name_0", "startyear", "comm", "comm_nominal", "disb", "disb_nominal"))
 names(subsetgodad)[names(subsetgodad) == "name_0"] <- "LeadersCountry" 
-names(subsetgodad)[names(subsetgodad) == "paymentyear"] <- "year" 
+names(subsetgodad)[names(subsetgodad) == "startyear"] <- "year" 
 subsetgodad$year <- as.factor(subsetgodad$year)
 subsetgodad <- subsetgodad %>% drop_na(year)
-# create sums for each aid-variable to keep one row per country and year. 
+# create sums for each aid-variable to keep one row per country/year. 
 godad_sum <- subsetgodad %>%
   group_by(LeadersCountry, year) %>%
   summarise(
@@ -124,7 +124,7 @@ mlg <- merged %>% relocate(prestige_1d, .before = positione)
 mlg <- mlg %>% relocate(prestige_1e, .before = id)
 mlg <- mlg %>% relocate(comm, comm_nominal, disb, disb_nominal, .before = gender)
 
-
+# divide amounts by 1.000.000
 mlg <- mlg %>%
   mutate(
     comm = round(comm / 1000000),
@@ -132,6 +132,8 @@ mlg <- mlg %>%
     disb = round(disb / 1000000),
     disb_nominal = round(disb_nominal / 1000000)
   )
+
+mlg <- mlg %>% drop_na(comm)
 
 # create the columns "tenure" and "tenure_period" to give information about the lenght and the time of the position held.
 # This is the long format, since we first keep the year column still. 
@@ -157,13 +159,15 @@ mlg_collapsed <- mlg_long %>%
   ungroup() %>%
   group_by(LeadersName, tenure_period, tenure) %>%
   summarise(
-    across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),  # Sum these
-    across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),  # Average other numeric
-    across(where(is.character) | where(is.factor), ~first(na.omit(.x))),  # Keep first for character/factor
+    across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
+    across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
+    across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
     .groups = "drop"
-  ) 
+  )
 
-mlg_collapsed <- mlg_collapsed %>% relocate(LeadersCountry, country_isocode, year,  .after = LeadersName)
+mlg_collapsed <- select(mlg_collapsed, -year)
+
+mlg_collapsed <- mlg_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
 
 ###############################################
 # Merging Horizons Output into one data frame #
@@ -774,7 +778,23 @@ Sand <- Sand %>%
 
 Sand$LeadersCountry <- gsub("Viet nam", "Vietnam", Sand$LeadersCountry)
 
+SLG <- mlg_collapsed %>%
+  left_join(
+    Sand %>% 
+      distinct(LeadersCountry, LeadersName) %>% 
+      mutate(SandDummy = 1),
+    by = c("LeadersCountry", "LeadersName")
+  ) %>%
+  mutate(SandDummy = replace_na(SandDummy, 0))
 
+SLG <- SLG %>%
+  mutate(iso3c = countrycode(LeadersCountry, origin = "country.name", destination = "iso3c"))
+SLG <- SLG %>% relocate(SandDummy,iso3c, .before = tenure_period)
+SLG <- select(SLG, -c(country_isocode, year))
+SLG <- SLG %>% filter(!grepl("202[1-9]|20[3-9][0-9]", tenure_period))
+
+
+log_model <- glm(SLG$SandDummy~SLG$comm, family = binomial)
 
 # subleaders <- leaders[, c("id", "country_name", "name")]
 # 
