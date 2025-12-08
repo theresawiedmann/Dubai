@@ -9,6 +9,9 @@ library(stringr)
 library(readr)
 library(data.table)
 
+
+#change
+
 ###################################################################
 # Using the Paths to Power list to identify the political leaders #
 ###################################################################
