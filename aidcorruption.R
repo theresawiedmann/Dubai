@@ -795,7 +795,7 @@ SLG <- SLG %>% filter(!grepl("202[1-9]|20[3-9][0-9]", tenure_period))
 
 
 log_model <- glm(SLG$SandDummy~SLG$comm, family = binomial)
-
+summary(log_model)
 # subleaders <- leaders[, c("id", "country_name", "name")]
 # 
 # #deleting duplicates in var name
