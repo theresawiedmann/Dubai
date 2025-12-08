@@ -9,9 +9,6 @@ library(stringr)
 library(readr)
 library(data.table)
 
-
-#hello
-
 ###################################################################
 # Using the Paths to Power list to identify the political leaders #
 ###################################################################
@@ -793,12 +790,53 @@ SLG <- mlg_collapsed %>%
 SLG <- SLG %>%
   mutate(iso3c = countrycode(LeadersCountry, origin = "country.name", destination = "iso3c"))
 SLG <- SLG %>% relocate(SandDummy,iso3c, .before = tenure_period)
-SLG <- select(SLG, -c(country_isocode, year))
+SLG <- select(SLG, -c(country_isocode))
 SLG <- SLG %>% filter(!grepl("202[1-9]|20[3-9][0-9]", tenure_period))
 
+# create the log of comm and add 1 as log(0) is undefined. 
+SLG <- SLG %>%
+  mutate(log_comm = log(comm + 1),
+         log_comm_nominal = log(comm_nominal +1), 
+         log_disb = log(disb +1),
+         log_disb_nominal = log(disb_nominal +1)
+         )
+SLG <- SLG %>% relocate(log_comm, .before = disb)
+SLG <- SLG %>% relocate(log_comm_nominal, .before = disb)
+SLG <- SLG %>% relocate(log_disb, .before = pob_longitude)
+SLG <- SLG %>% relocate(log_disb_nominal, .before = pob_longitude)
 
-log_model <- glm(SLG$SandDummy~SLG$comm, family = binomial)
-summary(log_model)
+summary(SLG)
+
+comm_model <- glm(SandDummy~log_comm, family = binomial, data = SLG)
+summary(comm_model)
+# odds ratio for aid (comm)
+exp(coef(comm_model)["log_comm"]) # result: 1.24394; A 1-unit increase in log(comm) 
+# multiplies the odds of being in SC by 1.24, or when e.g. aid doubles ($10M->$20M)
+# change in log(comm)=log(20)-log(10)=log(20/10)=log(2)=0.693
+# Therefore, change in log-odds=0.21828x0.693=0.151, and multiplier for odds=exp(0.151)=1.163 or about 16.3% increase in odds
+
+disb_model <- glm(SandDummy~log_disb, family = binomial, data = SLG)
+summary(disb_model)
+
+tenure_model <- glm(SandDummy~log_comm+tenure, family = binomial, data = SLG)
+summary(tenure_model)
+
+# Create predicted probabilities
+SLG <- SLG %>%
+  mutate(predicted_prob = predict(comm_model, type = "response"))
+ggplot(SLG, aes(x = log_comm, y = SandDummy)) +
+  geom_point(alpha = 0.3, size = 1) +  # Actual data points
+  geom_line(aes(y = predicted_prob), color = "blue", linewidth = 1.2) +  # Predicted curve
+  labs(
+    title = "Relationship between Aid Commitments and Probability of being in Sandcastles db",
+    x = "Log(Aid Commitments + 1)",
+    y = "Probability of Being in Sandcastles",
+    caption = "Blue line shows predicted probability from logistic regression"
+  ) +
+  theme_minimal()
+
+
+
 # subleaders <- leaders[, c("id", "country_name", "name")]
 # 
 # #deleting duplicates in var name
