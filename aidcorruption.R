@@ -91,6 +91,8 @@ leaders <- leaders %>% relocate(prestige_1a, .before = positionb)
 
 names(leaders)[names(leaders) == "country_name"] <- "LeadersCountry" 
 names(leaders)[names(leaders) == "name"] <- "LeadersName" 
+names(leaders)[names(leaders) == "gender"] <- "LeadersGender"
+
 
 ############################
 # Introduce GODAD datasets #
@@ -122,7 +124,7 @@ mlg <- mlg %>% relocate(prestige_1b, .before = positionc)
 merged <- mlg %>% relocate(prestige_1c, .before = positiond)
 mlg <- merged %>% relocate(prestige_1d, .before = positione)
 mlg <- mlg %>% relocate(prestige_1e, .before = id)
-mlg <- mlg %>% relocate(comm, comm_nominal, disb, disb_nominal, .before = gender)
+mlg <- mlg %>% relocate(comm, comm_nominal, disb, disb_nominal, .before = LeadersGender)
 
 # divide amounts by 1.000.000
 mlg <- mlg %>%
@@ -146,11 +148,31 @@ mlg_long <- mlg %>%
   ) %>%
   ungroup()
 
-mlg_long <- mlg_long %>% relocate(tenure, tenure_period, .before = gender)
+mlg_long <- mlg_long %>% relocate(tenure, tenure_period, .before = LeadersGender)
+
+mlg_long <- mlg_long %>%
+  mutate(year = as.character(year))
+  
 
 # This collapses the data frame by name and tenure, removing the year column, being "replaced" by the tenure_period column.
+# mlg_collapsed <- mlg_long %>%
+#   mutate(year_numeric = as.numeric(as.character(year))) %>%
+#   group_by(LeadersName, LeadersCountry) %>%
+#   mutate(
+#     tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
+#     tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
+#   ) %>%
+#   ungroup() %>%
+  # group_by(LeadersName, tenure_period, tenure) %>%
+  # summarise(
+  #   across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
+  #   across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
+  #   across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
+  #   .groups = "drop"
+  # )
+  # 
 mlg_collapsed <- mlg_long %>%
-  mutate(year_numeric = as.numeric(as.character(year))) %>%
+  # mutate(year_numeric = as.numeric(as.character(year))) %>%
   group_by(LeadersName, LeadersCountry) %>%
   mutate(
     tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
@@ -159,9 +181,15 @@ mlg_collapsed <- mlg_long %>%
   ungroup() %>%
   group_by(LeadersName, tenure_period, tenure) %>%
   summarise(
+    # Sum aid variables
     across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
-    across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
-    across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
+    
+    # Average ONLY these specific numeric variables (list them explicitly)
+    across(c(birthyear, pob_longitude, pob_latitude, pob_distancetocapital, year_numeric), ~mean(.x, na.rm = TRUE)),  # Replace with your actual numeric column names
+    
+    # Keep first for all categorical variables
+    across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),
+    
     .groups = "drop"
   )
 
@@ -791,7 +819,7 @@ SLG <- SLG %>%
   mutate(iso3c = countrycode(LeadersCountry, origin = "country.name", destination = "iso3c"))
 SLG <- SLG %>% relocate(SandDummy,iso3c, .before = tenure_period)
 SLG <- select(SLG, -c(country_isocode))
-SLG <- SLG %>% filter(!grepl("202[1-9]|20[3-9][0-9]", tenure_period))
+SLG <- SLG %>% filter(!grepl("202[3-9]|20[3-9][0-9]", tenure_period))
 
 # create the log of comm and add 1 as log(0) is undefined. 
 SLG <- SLG %>%
