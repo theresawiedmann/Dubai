@@ -151,7 +151,9 @@ mlg_long <- mlg %>%
 mlg_long <- mlg_long %>% relocate(tenure, tenure_period, .before = LeadersGender)
 
 mlg_long <- mlg_long %>%
-  mutate(year = as.character(year))
+  mutate(year = as.character(year),
+         LeadersGender = as.character(LeadersGender),
+         country_isocode = as.character(country_isocode))
   
 
 # This collapses the data frame by name and tenure, removing the year column, being "replaced" by the tenure_period column.
@@ -775,21 +777,19 @@ Sand <- Sand %>%
   relocate(LeadersName, .before = SandVersion) %>%
   relocate(SandName_clean, .before = ADDRESS)
 
-sum(is.na(Sand$PLOT_NUMBER) & is.na(Sand$FLAT_NUMBER) & is.na(Sand$ESTIMATED_VALUE))
-
-Sand <- Sand %>%
-  mutate(SandID = case_when(
-    # If all three are NA, just use "NA"
-    is.na(PLOT_NUMBER) & is.na(FLAT_NUMBER) & is.na(ESTIMATED_VALUE) ~ "NA",
-    # Otherwise, combine them with "NA" for missing values
-    TRUE ~ paste(
-      ifelse(is.na(PLOT_NUMBER), "NA", PLOT_NUMBER),
-      ifelse(is.na(FLAT_NUMBER), "NA", FLAT_NUMBER),
-      ifelse(is.na(ESTIMATED_VALUE), "NA", ESTIMATED_VALUE),
-      sep = "-"
-    )
-  ))
-Sand <- Sand %>% relocate(SandID, .before = DOB)
+# Sand <- Sand %>%
+#   mutate(SandID = case_when(
+#     # If all three are NA, just use "NA"
+#     is.na(PLOT_NUMBER) & is.na(FLAT_NUMBER) & is.na(ESTIMATED_VALUE) ~ "NA",
+#     # Otherwise, combine them with "NA" for missing values
+#     TRUE ~ paste(
+#       ifelse(is.na(PLOT_NUMBER), "NA", PLOT_NUMBER),
+#       ifelse(is.na(FLAT_NUMBER), "NA", FLAT_NUMBER),
+#       ifelse(is.na(ESTIMATED_VALUE), "NA", ESTIMATED_VALUE),
+#       sep = "-"
+#     )
+#   ))
+# Sand <- Sand %>% relocate(SandID, .before = DOB)
 
 Sand <- Sand %>%
   group_by(LeadersName, LeadersCountry) %>%
@@ -805,21 +805,32 @@ Sand <- Sand %>%
   relocate(PropertyValueSum, .before = PropertyCount)
 
 Sand$LeadersCountry <- gsub("Viet nam", "Vietnam", Sand$LeadersCountry)
+Sand <- Sand %>% rename(SandGender = GENDER)
+Sand <- select(Sand, -c(GENDER))
+Sand <- Sand %>% relocate(SandGender, .before = PropertyValueSum)
+
+# SLG <- mlg_collapsed %>%
+#   full_join(
+#     Sand %>% 
+#       distinct(LeadersCountry, LeadersName) %>% 
+#       mutate(SandDummy = 1),
+#     by = c("LeadersCountry", "LeadersName")
+#   ) %>%
+#   mutate(SandDummy = replace_na(SandDummy, 0))
 
 SLG <- mlg_collapsed %>%
-  left_join(
+  full_join(
     Sand %>% 
-      distinct(LeadersCountry, LeadersName) %>% 
       mutate(SandDummy = 1),
-    by = c("LeadersCountry", "LeadersName")
+    by = c("LeadersCountry", "LeadersName"),
+    suffix = c("_mlg", "_sand")  # Add suffixes to overlapping columns
   ) %>%
   mutate(SandDummy = replace_na(SandDummy, 0))
 
 SLG <- SLG %>%
-  mutate(iso3c = countrycode(LeadersCountry, origin = "country.name", destination = "iso3c"))
-SLG <- SLG %>% relocate(SandDummy,iso3c, .before = tenure_period)
-SLG <- select(SLG, -c(country_isocode))
-SLG <- SLG %>% filter(!grepl("202[3-9]|20[3-9][0-9]", tenure_period))
+  relocate(SandGender, .before = positiona)%>%
+  relocate(SandDummy, .before = tenure_period) %>%
+  filter(!grepl("202[3-9]|20[3-9][0-9]", tenure_period))
 
 # create the log of comm and add 1 as log(0) is undefined. 
 SLG <- SLG %>%
@@ -828,10 +839,13 @@ SLG <- SLG %>%
          log_disb = log(disb +1),
          log_disb_nominal = log(disb_nominal +1)
          )
-SLG <- SLG %>% relocate(log_comm, .before = disb)
-SLG <- SLG %>% relocate(log_comm_nominal, .before = disb)
-SLG <- SLG %>% relocate(log_disb, .before = pob_longitude)
-SLG <- SLG %>% relocate(log_disb_nominal, .before = pob_longitude)
+SLG <- SLG %>% 
+  (relocate(log_comm, .before = disb)%>%
+  relocate(log_comm_nominal, .before = disb)%>%
+  relocate(log_disb, .before = pob_longitude)%>%
+  relocate(log_disb_nominal, .before = pob_longitude)%>%
+  relocate(SandName, .before = LeadersCountry)
+  )
 
 summary(SLG)
 
