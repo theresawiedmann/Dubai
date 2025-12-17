@@ -116,8 +116,19 @@ godad_sum <- subsetgodad %>%
   ) %>%
   arrange(LeadersCountry, year)
 
+# nrow(leaders)
+# length(unique(leaders$LeadersName))
+# 
+# leaders_before <- unique(leaders$LeadersName)
+# leaders_after <- unique(mlg$LeadersName[!is.na(mlg$LeadersName)])
+# missing_leaders <- setdiff(leaders_before, leaders_after)
+# print(missing_leaders)
+
 # merge GODAD and the Political Leaders data frames by country and year, keeping the one row per country and year and the wide format for the political positions, creating a variable for each year in office.
-mlg <- full_join(leaders, godad_sum, by = c("LeadersCountry", "year"), suffix = c(".leaders", ".godad_sum"), keep = NULL) #use left_join to keep only country names from Sandcastles in dubai df
+mlg <- leaders %>%
+  left_join(godad_sum, 
+            by = c("LeadersCountry", "year"), 
+            suffix = c(".leaders", ".godad_sum"))
 # shows NAs before 1991, as GODAD starts in 1991 only. 
 
 mlg <- mlg %>% relocate(prestige_1b, .before = positionc)
@@ -135,7 +146,7 @@ mlg <- mlg %>%
     disb_nominal = round(disb_nominal / 1000000)
   )
 
-mlg <- mlg %>% drop_na(comm)
+#mlg <- mlg %>% drop_na(comm)
 
 # create the columns "tenure" and "tenure_period" to give information about the lenght and the time of the position held.
 # This is the long format, since we first keep the year column still. 
@@ -225,7 +236,7 @@ datalist <- lapply(country_folders, function(country_path) {
 }) %>% bind_rows()      
 
 merged_data <- type_convert(datalist) # convert back / also type_convert()
-sapply(merged_data, class) #info on class 
+#sapply(merged_data, class) #info on class 
 merged_data <- merged_data %>%
   relocate(country, data_year, .before = 1)
 #saveRDS(merged_data, "merged_data.rds")
@@ -791,13 +802,36 @@ Sand <- Sand %>%
 #   ))
 # Sand <- Sand %>% relocate(SandID, .before = DOB)
 
+# Sand <- Sand %>%
+#   group_by(LeadersName, LeadersCountry) %>%
+#   summarise(
+#     PropertyCount = n(),
+#     PropertyValueSum = sum(ESTIMATED_VALUE, na.rm = TRUE),
+#     across(everything(), first),
+#     .groups = "drop"
+#   )
+
 Sand <- Sand %>%
   group_by(LeadersName, LeadersCountry) %>%
+  mutate(SandName_num = row_number()) %>%
   summarise(
     PropertyCount = n(),
     PropertyValueSum = sum(ESTIMATED_VALUE, na.rm = TRUE),
-    across(everything(), first),
+    across(c(-SandName, -SandName_num), first),
     .groups = "drop"
+  ) %>%
+  # Pivot to create SandName1, SandName2, etc.
+  left_join(
+    Sand %>%
+      group_by(LeadersName, LeadersCountry) %>%
+      mutate(SandName_num = row_number()) %>%
+      select(LeadersName, LeadersCountry, SandName, SandName_num) %>%
+      pivot_wider(
+        names_from = SandName_num,
+        values_from = SandName,
+        names_prefix = "SandName"
+      ),
+    by = c("LeadersName", "LeadersCountry")
   )
 
 Sand <- Sand %>% 
@@ -805,9 +839,32 @@ Sand <- Sand %>%
   relocate(PropertyValueSum, .before = PropertyCount)
 
 Sand$LeadersCountry <- gsub("Viet nam", "Vietnam", Sand$LeadersCountry)
-Sand <- Sand %>% rename(SandGender = GENDER)
-Sand <- select(Sand, -c(GENDER))
-Sand <- Sand %>% relocate(SandGender, .before = PropertyValueSum)
+Sand$LeadersCountry <- gsub("Syrian Arab Republic", "Syria", Sand$LeadersCountry)
+mlg_collapsed$LeadersCountry <- gsub("Myanmar (Burma)", "Myanmar", mlg_collapsed$LeadersCountry)
+
+Sand <- Sand %>% 
+  rename(SandGender = GENDER)%>%
+  rename(SandCountry = NATIONALITY)
+Sand <- Sand %>% 
+  relocate(SandGender, .before = PropertyValueSum)
+
+mlg_collapsed <- mlg_collapsed %>%
+  mutate(across(where(is.character), str_squish)) 
+
+Sand <- Sand %>%
+  mutate(across(where(is.character), str_squish))
+
+
+Missing <- Sand %>%
+  anti_join(mlg_collapsed, by = c("LeadersCountry", "LeadersName"))
+
+# some values came into the data set erroneously, we need to delete them manually. An explanation is given for each case
+# Abdul Ali, Bangladesh; Ali Haidar, Sudan: there is no leader called as such
+Sand <- Sand[-c(4, 64), ]
+
+# Oumar Diallo in Niger does not have the name Alpha, this only applies for the leader in Guinea
+Sand[71, 1] = "Oumar Diallo"
+Sand
 
 # SLG <- mlg_collapsed %>%
 #   full_join(
@@ -819,7 +876,7 @@ Sand <- Sand %>% relocate(SandGender, .before = PropertyValueSum)
 #   mutate(SandDummy = replace_na(SandDummy, 0))
 
 SLG <- mlg_collapsed %>%
-  full_join(
+  left_join(
     Sand %>% 
       mutate(SandDummy = 1),
     by = c("LeadersCountry", "LeadersName"),
@@ -830,6 +887,8 @@ SLG <- mlg_collapsed %>%
 SLG <- SLG %>%
   relocate(SandGender, .before = positiona)%>%
   relocate(SandDummy, .before = tenure_period) %>%
+  relocate(SandCountry, .before = country_isocode)%>%
+  #relocate(SandName, .before = LeadersCountry)%>%
   filter(!grepl("202[3-9]|20[3-9][0-9]", tenure_period))
 
 # create the log of comm and add 1 as log(0) is undefined. 
@@ -840,14 +899,24 @@ SLG <- SLG %>%
          log_disb_nominal = log(disb_nominal +1)
          )
 SLG <- SLG %>% 
-  (relocate(log_comm, .before = disb)%>%
-  relocate(log_comm_nominal, .before = disb)%>%
-  relocate(log_disb, .before = pob_longitude)%>%
+  relocate(log_comm, .before = disb) %>%
+  relocate(log_comm_nominal, .before = disb) %>%
+  relocate(log_disb, .before = pob_longitude) %>%
   relocate(log_disb_nominal, .before = pob_longitude)%>%
-  relocate(SandName, .before = LeadersCountry)
-  )
+  relocate(birthyear,LeadersGender, SandGender,PropertyValueSum, PropertyCount, .before = pob_longitude)%>%
+  select(-c(year_numeric))
 
 summary(SLG)
+write.csv(SLG, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+
+dubai <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+
+###############
+# Regressions #
+###############
+
+lm <- lm(SandDummy~comm, data = SLG)
+summary(lm)
 
 comm_model <- glm(SandDummy~log_comm, family = binomial, data = SLG)
 summary(comm_model)
@@ -860,24 +929,31 @@ exp(coef(comm_model)["log_comm"]) # result: 1.24394; A 1-unit increase in log(co
 disb_model <- glm(SandDummy~log_disb, family = binomial, data = SLG)
 summary(disb_model)
 
-tenure_model <- glm(SandDummy~log_comm+tenure, family = binomial, data = SLG)
+tenure_model <- glm(SandDummy~tenure, family = binomial, data = SLG)
 summary(tenure_model)
 
-# Create predicted probabilities
-SLG <- SLG %>%
-  mutate(predicted_prob = predict(comm_model, type = "response"))
-ggplot(SLG, aes(x = log_comm, y = SandDummy)) +
-  geom_point(alpha = 0.3, size = 1) +  # Actual data points
-  geom_line(aes(y = predicted_prob), color = "blue", linewidth = 1.2) +  # Predicted curve
-  labs(
-    title = "Relationship between Aid Commitments and Probability of being in Sandcastles db",
-    x = "Log(Aid Commitments + 1)",
-    y = "Probability of Being in Sandcastles",
-    caption = "Blue line shows predicted probability from logistic regression"
-  ) +
-  theme_minimal()
+# Fixed effects
 
+library(bife)
+library(fixest)
+fe_model <- bife(SandDummy ~ log_comm | LeadersCountry, 
+              data = SLG,
+              model = "logit",
+              bias_corr = "ana")
+summary(fe_model)
+fe_model2 <- feols(SandDummy ~ log_comm | LeadersCountry, 
+                 data = SLG)
+summary(fe_model2)
 
+countries_with_variation <- SLG %>%
+  group_by(LeadersCountry) %>%
+  summarise(
+    n_leaders = n(),
+    n_dubai = sum(SandDummy),
+    pct_dubai = mean(SandDummy) * 100
+  ) %>%
+  filter(n_dubai > 0 & n_dubai < n_leaders) %>%  # Countries with variation
+  arrange(desc(pct_dubai))
 
 # subleaders <- leaders[, c("id", "country_name", "name")]
 # 
