@@ -19,7 +19,7 @@ leaders <- readRDS("~/Aid and corruption/Data input/PathstoPower_individuallevel
 em_leaders <- leaders %>% drop_na(name)
 
 #omitting developed countries, keeping only emerging markets
-dc = c("Australia", "Austria", "Bahrain", "Belgium", "Canada", "Cyprus", "Czechia", "Denmark", "East Germany", "Estonia", "Finland", "France", "Germany", "Greece", "Iceland", "Ireland", "Israel", "Italy", "Japan", "Kuwait", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "New Zealand", "Norway", "Portugal", "Saudi Arabia", "Singapore", "Slovakia", "Slovenia", "South Korea", "Soviet Union", "Spain", "Sweden", "Switzerland", "Taiwan", "Unted Kingdom", "United States")
+dc = c("Australia", "Austria", "Bahrain", "Belgium", "Canada", "Cyprus", "Czechia", "Denmark", "East Germany", "Estonia", "Finland", "France", "Germany", "Greece", "Iceland", "Ireland", "Israel", "Italy", "Japan", "Kuwait", "Latvia", "Lithuania", "Luxembourg", "Malta", "Netherlands", "New Zealand", "Norway", "Portugal", "Saudi Arabia", "Singapore", "Slovenia", "South Korea", "Soviet Union", "Spain", "Sweden", "Switzerland", "Taiwan", "Unted Kingdom", "United States")
 leaders <- em_leaders %>%
   filter(!country_name %in% dc)
 
@@ -93,6 +93,9 @@ names(leaders)[names(leaders) == "country_name"] <- "LeadersCountry"
 names(leaders)[names(leaders) == "name"] <- "LeadersName" 
 names(leaders)[names(leaders) == "gender"] <- "LeadersGender"
 
+leaders <- leaders %>%
+  mutate(LeadersCountry = str_replace(LeadersCountry, "Myanmar \\(Burma\\)", "Myanmar"),
+         LeadersCountry = str_replace(LeadersCountry, "Congo \\- Kinshasa", "Congo"))
 
 ############################
 # Introduce GODAD datasets #
@@ -183,7 +186,7 @@ mlg_long <- mlg_long %>%
   #   across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
   #   .groups = "drop"
   # )
-  # 
+  
 mlg_collapsed <- mlg_long %>%
   # mutate(year_numeric = as.numeric(as.character(year))) %>%
   group_by(LeadersName, LeadersCountry) %>%
@@ -209,6 +212,8 @@ mlg_collapsed <- mlg_long %>%
 mlg_collapsed <- select(mlg_collapsed, -year)
 
 mlg_collapsed <- mlg_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
+mlg_collapsed$LeadersName <- gsub("-", " ", mlg_collapsed$LeadersName)
+
 
 ###############################################
 # Merging Horizons Output into one data frame #
@@ -784,9 +789,11 @@ Sand <- merged_data %>%
   )) %>%
   filter(!is.na(LeadersName)) 
 
-Sand <- Sand %>%
+Sand_fullnames <- Sand %>%
   relocate(LeadersName, .before = SandVersion) %>%
   relocate(SandName_clean, .before = ADDRESS)
+
+write.csv(Sand_fullnames, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Sand_fullnames.csv")
 
 # Sand <- Sand %>%
 #   mutate(SandID = case_when(
@@ -811,7 +818,7 @@ Sand <- Sand %>%
 #     .groups = "drop"
 #   )
 
-Sand <- Sand %>%
+Sand <- Sand_fullnames %>%
   group_by(LeadersName, LeadersCountry) %>%
   mutate(SandName_num = row_number()) %>%
   summarise(
@@ -840,16 +847,14 @@ Sand <- Sand %>%
 
 Sand$LeadersCountry <- gsub("Viet nam", "Vietnam", Sand$LeadersCountry)
 Sand$LeadersCountry <- gsub("Syrian Arab Republic", "Syria", Sand$LeadersCountry)
-mlg_collapsed$LeadersCountry <- gsub("Myanmar (Burma)", "Myanmar", mlg_collapsed$LeadersCountry)
+Sand$LeadersCountry <- gsub("Ivory coast", "Ivory Coast", Sand$LeadersCountry)
+
 
 Sand <- Sand %>% 
   rename(SandGender = GENDER)%>%
   rename(SandCountry = NATIONALITY)
 Sand <- Sand %>% 
   relocate(SandGender, .before = PropertyValueSum)
-
-mlg_collapsed <- mlg_collapsed %>%
-  mutate(across(where(is.character), str_squish)) 
 
 Sand <- Sand %>%
   mutate(across(where(is.character), str_squish))
@@ -859,12 +864,12 @@ Missing <- Sand %>%
   anti_join(mlg_collapsed, by = c("LeadersCountry", "LeadersName"))
 
 # some values came into the data set erroneously, we need to delete them manually. An explanation is given for each case
-# Abdul Ali, Bangladesh; Ali Haidar, Sudan: there is no leader called as such
-Sand <- Sand[-c(4, 64), ]
+# Abdul Ali, Bangladesh; Ali Haidar, Sudan; Ismail Khan, Morocco; Mohammed Aziz, Bangladesh; Murad Saeed, Syria; Pierre Andre, Haiti; Sheikh Abdul Aziz: there is no leader called as such
+Sand <- Sand[-c(4, 65, 195, 312, 329, 361, 397), ]
 
 # Oumar Diallo in Niger does not have the name Alpha, this only applies for the leader in Guinea
-Sand[71, 1] = "Oumar Diallo"
-Sand
+Sand[70, 1] = "Oumar Diallo"
+Sand[173, 1] = "Adel Ibrahim"
 
 # SLG <- mlg_collapsed %>%
 #   full_join(
@@ -906,10 +911,31 @@ SLG <- SLG %>%
   relocate(birthyear,LeadersGender, SandGender,PropertyValueSum, PropertyCount, .before = pob_longitude)%>%
   select(-c(year_numeric))
 
-summary(SLG)
+#summary(SLG)
 write.csv(SLG, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
 
-dubai <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+Brokers <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Data input/Brokers.csv")
+
+library(stringdist)
+
+# For each name in Sand_fullnames, find best match in Brokers
+results <- Sand_fullnames %>%
+  rowwise() %>%
+  mutate(
+    best_match = Brokers$broker_name_en[which.min(stringdist(SandName, Brokers$broker_name_en, method = "jw"))],
+    match_distance = min(stringdist(SandName, Brokers$broker_name_en, method = "jw")),
+    match_quality = 1 - match_distance,
+    # Create dummy variable: 1 if good match, 0 if not
+    is_match = ifelse(match_quality > 0.8, 1, 0)  # Adjust threshold as needed
+  ) %>%
+  ungroup()
+
+# View results
+View(results)
+results <- results %>% relocate(best_match, .before = DOB)
+
+# Summary of matches
+table(results$is_match)
 
 ###############
 # Regressions #
