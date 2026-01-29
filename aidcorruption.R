@@ -97,17 +97,197 @@ leaders <- leaders %>%
   mutate(LeadersCountry = str_replace(LeadersCountry, "Myanmar \\(Burma\\)", "Myanmar"),
          LeadersCountry = str_replace(LeadersCountry, "Congo \\- Kinshasa", "Congo"))
 
+write.csv(leaders,"C:/Users/wiedmann4/Documents/Aid and corruption/Out/leaders.csv")
+
+#####################
+# Introduce AidData #
+#####################
+library(sf)
+aiddata <- st_read("C:/Users/wiedmann4/Documents/Aid and corruption/Data input/AidData/all_combined_global.gpkg")
+aiddata$Donor <- "China"
+aiddata$DONOR <- "CHN"
+names(aiddata)[names(aiddata) == "Recipient.ISO.3"] <- "RECIPIENT"
+names(aiddata)[names(aiddata) == "Amount..Constant.USD.2021."] <- "Comm.Constant"
+
+aiddata <- aiddata %>%
+  mutate(
+    Aid.Constant = round(Comm.Constant / 1000000),
+  )
+
+aiddata2 <- select(aiddata, Recipient, RECIPIENT, Aid.Constant, Commitment.Year, Donor, DONOR)
+
+dac_disb <- read.csv("P:/Wiedmann, Theresa/Documents/Aid and corruption/Data input/OECD/DAC2A.csv")
+dac_comm <- read.csv("P:/Wiedmann, Theresa/Documents/Aid and corruption/Data input/OECD/DAC3A.csv")
+
+names(dac_disb)[names(dac_disb) == "TIME_PERIOD"] <- "Commitment.Year"
+names(dac_comm)[names(dac_comm) == "TIME_PERIOD"] <- "Commitment.Year"
+names(dac_disb)[names(dac_disb) == "OBS_VALUE"] <- "Disb.Constant"
+names(dac_comm)[names(dac_comm) == "OBS_VALUE"] <- "Comm.Constant"
+
+dac_disb <- select(dac_disb, DONOR, Donor, RECIPIENT, Recipient, Commitment.Year, Disb.Constant)
+dac_comm <- select(dac_comm, DONOR, Donor, RECIPIENT, Recipient, Commitment.Year, Comm.Constant)
+
+dac_disb_summarized <- dac_disb %>%
+  group_by(Recipient, Commitment.Year) %>%
+  summarise(Disb.Constant = sum(Disb.Constant, na.rm = TRUE),
+            across(everything(), first),
+            .groups = 'drop')
+
+dac_comm_summarized <- dac_comm %>%
+  group_by(Recipient, Commitment.Year) %>%
+  summarise(Comm.Constant = sum(Comm.Constant, na.rm = TRUE),
+            across(everything(), first),
+            .groups = 'drop')
+
+dac <- dac_disb_summarized %>%
+  full_join(dac_comm_summarized,
+            by = c("Donor", "Commitment.Year", "DONOR", "RECIPIENT", "Recipient"),
+            suffix = c(".dac_disb", ".dac_comm"))
+
+dac_long <- dac %>%
+  # Create a column indicating the aid type
+  mutate(Aid.Type = case_when(
+    !is.na(Comm.Constant) & is.na(Disb.Constant) ~ "Comm",
+    !is.na(Disb.Constant) & is.na(Comm.Constant) ~ "Disb",
+    !is.na(Comm.Constant) & !is.na(Disb.Constant) ~ "Both",
+    TRUE ~ "Neither"
+  )) %>%
+  # Combine the aid values into one column
+  mutate(Aid.Value = coalesce(Comm.Constant, Disb.Constant)) %>%
+  # Create donor column names with aid type suffix
+  mutate(Donor.Column = paste(Donor, Aid.Type, sep = ".")) %>%
+  # Select relevant columns
+  select(Recipient, Commitment.Year, Donor.Column, Aid.Value, Disb.Constant, Comm.Constant) %>%
+  # First calculate totals per country-year
+  group_by(Recipient, Commitment.Year) %>%
+  mutate(
+    Total.Disb.Constant = sum(Disb.Constant, na.rm = TRUE),
+    Total.Comm.Constant = sum(Comm.Constant, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  # Pivot to wide format with one row per country-year
+  pivot_wider(
+    names_from = Donor.Column,
+    values_from = Aid.Value,
+    values_fill = NA
+  ) %>%
+  # Keep the total columns
+  select(Recipient, Commitment.Year, Total.Disb.Constant, Total.Comm.Constant, everything())
+
+# Rename column in aiddata2 first
+aiddata2 <- aiddata2 %>%
+  rename(China.Comm = Aid.Constant)
+
+# Then merge
+aid <- dac_long %>%
+  full_join(aiddata2, by = c("Recipient", "Commitment.Year"))
+
+aid<- aid %>% relocate(China.Comm, .before = Disb.Constant)
+
+names(aid)[names(aid) == "Recipient"] <- "LeadersCountry"
+names(aid)[names(aid) == "Commitment.Year"] <- "year"
+
+aid$year <- as.factor(aid$year)
+
+mla <- leaders %>%
+  left_join(aid,
+            by = c("LeadersCountry", "year"),
+            suffix = c(".leaders", ".aid"))
+#mla <- mla %>% select(-c("DONOR", "Donor", "RECIPIENT", "geom"))
+
+mla <- mla %>% relocate(prestige_1b, .before = positionc)
+merged <- mla %>% relocate(prestige_1c, .before = positiond)
+mla <- merged %>% relocate(prestige_1d, .before = positione)
+mla <- mla %>% relocate(prestige_1e, .before = id)
+mla <- mla %>% relocate(Total.Comm.Constant, .before = LeadersGender)
+mla <- mla %>% relocate(China.Comm, .before = LeadersGender)
+mla <- mla %>% relocate(Total.Disb.Constant, .before = LeadersGender)
+
+mla <- mla%>%
+  group_by(LeadersName, LeadersCountry)%>%
+  mutate(
+    ca
+  )
+
+#mla <- mla %>% drop_na(Aid.Constant)
+
+# create the columns "tenure" and "tenure_period" to give information about the length and the time of the position held.
+# This is the long format, since we first keep the year column still.
+mla_long <- mla %>%
+  mutate(year_numeric = as.numeric(as.character(year))) %>%  # Create numeric version
+  group_by(LeadersName, LeadersCountry) %>%
+  mutate(
+    tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
+    tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
+  ) %>%
+  ungroup()
+
+mla_long <- mla_long %>% relocate(tenure, tenure_period, .before = LeadersGender)
+
+mla_long <- mla_long %>%
+  mutate(year = as.character(year),
+         LeadersGender = as.character(LeadersGender),
+         country_isocode = as.character(country_isocode))
+
+#This collapses the data frame by name and tenure, removing the year column, being "replaced" by the tenure_period column.
+mla_collapsed <- mla_long %>%
+  mutate(year_numeric = as.numeric(as.character(year))) %>%
+  group_by(LeadersName, LeadersCountry) %>%
+  mutate(
+    tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
+    tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
+  ) %>%
+  ungroup() %>%
+  group_by(LeadersName, tenure_period, tenure) #%>%
+# summarise(
+#   across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
+#   across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
+#   across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
+#   .groups = "drop"
+#  )
+mla_collapsed <- mla_long %>%
+  # mutate(year_numeric = as.numeric(as.character(year))) %>%
+  group_by(LeadersName, LeadersCountry) %>%
+  mutate(
+    tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
+    tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
+  ) %>%
+  ungroup() %>%
+  group_by(LeadersName, tenure_period, tenure) %>%
+  summarise(
+    # Sum aid variables
+    Aid.Constant = sum(Aid.Constant, na.rm = TRUE),
+    
+    # Average ONLY these specific numeric variables (list them explicitly)
+    across(c(birthyear, pob_longitude, pob_latitude, pob_distancetocapital, year_numeric), ~mean(.x, na.rm = TRUE)),  # Replace with your actual numeric column names
+    
+    # Keep first for all categorical variables
+    across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),
+    
+    .groups = "drop"
+  )
+
+#mla_collapsed <- select(mla_collapsed, -year)
+
+mla_collapsed <- mla_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
+mla_collapsed$LeadersName <- gsub("-", " ", mla_collapsed$LeadersName)
 ############################
 # Introduce GODAD datasets #
 ############################
 
 godad <- read.csv("~/Aid and corruption/Data input/GODAD/projectlevel_china_wb.csv")
-subsetgodad <- subset(godad, select = c("name_0", "startyear", "comm", "comm_nominal", "disb", "disb_nominal"))
-names(subsetgodad)[names(subsetgodad) == "name_0"] <- "LeadersCountry" 
-names(subsetgodad)[names(subsetgodad) == "startyear"] <- "year" 
+subsetgodad <- subset(godad, select = c("name_0", "startyear", "comm_loc_evensplit", "comm_nominal_loc_evensplit", "disb_loc_evensplit", "disb_nominal_loc_evensplit"))
+subsetgodad <- subsetgodad %>%
+  rename(
+    comm = comm_loc_evensplit,
+    disb = disb_loc_evensplit,
+    comm_nominal = comm_nominal_loc_evensplit,
+    disb_nominal = disb_nominal_loc_evensplit)
+names(subsetgodad)[names(subsetgodad) == "name_0"] <- "LeadersCountry"
+names(subsetgodad)[names(subsetgodad) == "startyear"] <- "year"
 subsetgodad$year <- as.factor(subsetgodad$year)
 subsetgodad <- subsetgodad %>% drop_na(year)
-# create sums for each aid-variable to keep one row per country/year. 
+#create sums for each aid-variable to keep one row per country/year.
 godad_sum <- subsetgodad %>%
   group_by(LeadersCountry, year) %>%
   summarise(
@@ -119,9 +299,12 @@ godad_sum <- subsetgodad %>%
   ) %>%
   arrange(LeadersCountry, year)
 
+subsetgodad <- subsetgodad %>% drop_na(comm)
+
+
 # nrow(leaders)
 # length(unique(leaders$LeadersName))
-# 
+#
 # leaders_before <- unique(leaders$LeadersName)
 # leaders_after <- unique(mlg$LeadersName[!is.na(mlg$LeadersName)])
 # missing_leaders <- setdiff(leaders_before, leaders_after)
@@ -129,10 +312,10 @@ godad_sum <- subsetgodad %>%
 
 # merge GODAD and the Political Leaders data frames by country and year, keeping the one row per country and year and the wide format for the political positions, creating a variable for each year in office.
 mlg <- leaders %>%
-  left_join(godad_sum, 
-            by = c("LeadersCountry", "year"), 
+  left_join(godad_sum,
+            by = c("LeadersCountry", "year"),
             suffix = c(".leaders", ".godad_sum"))
-# shows NAs before 1991, as GODAD starts in 1991 only. 
+# shows NAs before 1991, as GODAD starts in 1991 only.
 
 mlg <- mlg %>% relocate(prestige_1b, .before = positionc)
 merged <- mlg %>% relocate(prestige_1c, .before = positiond)
@@ -149,10 +332,10 @@ mlg <- mlg %>%
     disb_nominal = round(disb_nominal / 1000000)
   )
 
-#mlg <- mlg %>% drop_na(comm)
+mlg <- mlg %>% drop_na(comm)
 
 # create the columns "tenure" and "tenure_period" to give information about the lenght and the time of the position held.
-# This is the long format, since we first keep the year column still. 
+# This is the long format, since we first keep the year column still.
 mlg_long <- mlg %>%
   mutate(year_numeric = as.numeric(as.character(year))) %>%  # Create numeric version
   group_by(LeadersName, LeadersCountry) %>%
@@ -168,27 +351,27 @@ mlg_long <- mlg_long %>%
   mutate(year = as.character(year),
          LeadersGender = as.character(LeadersGender),
          country_isocode = as.character(country_isocode))
-  
 
-# This collapses the data frame by name and tenure, removing the year column, being "replaced" by the tenure_period column.
-# mlg_collapsed <- mlg_long %>%
-#   mutate(year_numeric = as.numeric(as.character(year))) %>%
-#   group_by(LeadersName, LeadersCountry) %>%
-#   mutate(
-#     tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
-#     tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
-#   ) %>%
-#   ungroup() %>%
-  # group_by(LeadersName, tenure_period, tenure) %>%
-  # summarise(
-  #   across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
-  #   across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
-  #   across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
-  #   .groups = "drop"
-  # )
-  
+
+#This collapses the data frame by name and tenure, removing the year column, being "replaced" by the tenure_period column.
 mlg_collapsed <- mlg_long %>%
-  # mutate(year_numeric = as.numeric(as.character(year))) %>%
+  mutate(year_numeric = as.numeric(as.character(year))) %>%
+  group_by(LeadersName, LeadersCountry) %>%
+  mutate(
+    tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
+    tenure = max(year_numeric, na.rm = TRUE) - min(year_numeric, na.rm = TRUE) + 1
+  ) %>%
+  ungroup() %>%
+  group_by(LeadersName, tenure_period, tenure) %>%
+  summarise(
+    across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
+    across(where(is.numeric) & !c(comm, comm_nominal, disb, disb_nominal) & !contains("year"), ~mean(.x, na.rm = TRUE)),
+    across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),  # Fixed line
+    .groups = "drop"
+  )
+
+mlg_collapsed <- mlg_long %>%
+  mutate(year_numeric = as.numeric(as.character(year))) %>%
   group_by(LeadersName, LeadersCountry) %>%
   mutate(
     tenure_period = paste0(min(year_numeric, na.rm = TRUE), "-", max(year_numeric, na.rm = TRUE)),
@@ -199,21 +382,22 @@ mlg_collapsed <- mlg_long %>%
   summarise(
     # Sum aid variables
     across(c(comm, comm_nominal, disb, disb_nominal), ~sum(.x, na.rm = TRUE)),
-    
+
     # Average ONLY these specific numeric variables (list them explicitly)
     across(c(birthyear, pob_longitude, pob_latitude, pob_distancetocapital, year_numeric), ~mean(.x, na.rm = TRUE)),  # Replace with your actual numeric column names
-    
+
     # Keep first for all categorical variables
     across(where(is.character) | where(is.factor), ~first(na.omit(c(.x, NA)))[1]),
-    
+
     .groups = "drop"
   )
 
-mlg_collapsed <- select(mlg_collapsed, -year)
+mlg_collapsed <- select(mlg_collapsed, -year_numeric)
 
 mlg_collapsed <- mlg_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
 mlg_collapsed$LeadersName <- gsub("-", " ", mlg_collapsed$LeadersName)
 
+rm(leaders_constant, leaders_filtered, leaders_wide, merged, mlg_long, subsetgodad, em_leaders, position_counts, position_counts2)
 
 ###############################################
 # Merging Horizons Output into one data frame #
@@ -793,7 +977,7 @@ Sand_fullnames <- Sand %>%
   relocate(LeadersName, .before = SandVersion) %>%
   relocate(SandName_clean, .before = ADDRESS)
 
-write.csv(Sand_fullnames, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Sand_fullnames.csv")
+#write.csv(Sand_fullnames, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Sand_fullnames.csv")
 
 # Sand <- Sand %>%
 #   mutate(SandID = case_when(
@@ -861,7 +1045,7 @@ Sand <- Sand %>%
 
 
 Missing <- Sand %>%
-  anti_join(mlg_collapsed, by = c("LeadersCountry", "LeadersName"))
+  anti_join(mla_collapsed, by = c("LeadersCountry", "LeadersName"))
 
 # some values came into the data set erroneously, we need to delete them manually. An explanation is given for each case
 # Abdul Ali, Bangladesh; Ali Haidar, Sudan; Ismail Khan, Morocco; Mohammed Aziz, Bangladesh; Murad Saeed, Syria; Pierre Andre, Haiti; Sheikh Abdul Aziz: there is no leader called as such
@@ -871,21 +1055,12 @@ Sand <- Sand[-c(4, 65, 195, 312, 329, 361, 397), ]
 Sand[70, 1] = "Oumar Diallo"
 Sand[173, 1] = "Adel Ibrahim"
 
-# SLG <- mlg_collapsed %>%
-#   full_join(
-#     Sand %>% 
-#       distinct(LeadersCountry, LeadersName) %>% 
-#       mutate(SandDummy = 1),
-#     by = c("LeadersCountry", "LeadersName")
-#   ) %>%
-#   mutate(SandDummy = replace_na(SandDummy, 0))
-
-SLG <- mlg_collapsed %>%
+SLG <- mla_collapsed %>%
   left_join(
     Sand %>% 
       mutate(SandDummy = 1),
     by = c("LeadersCountry", "LeadersName"),
-    suffix = c("_mlg", "_sand")  # Add suffixes to overlapping columns
+    suffix = c("_mla", "_sand")  # Add suffixes to overlapping columns
   ) %>%
   mutate(SandDummy = replace_na(SandDummy, 0))
 
@@ -898,22 +1073,16 @@ SLG <- SLG %>%
 
 # create the log of comm and add 1 as log(0) is undefined. 
 SLG <- SLG %>%
-  mutate(log_comm = log(comm + 1),
-         log_comm_nominal = log(comm_nominal +1), 
-         log_disb = log(disb +1),
-         log_disb_nominal = log(disb_nominal +1)
-         )
+  mutate(log_aid = log(Aid.Constant + 1))
 SLG <- SLG %>% 
-  relocate(log_comm, .before = disb) %>%
-  relocate(log_comm_nominal, .before = disb) %>%
-  relocate(log_disb, .before = pob_longitude) %>%
-  relocate(log_disb_nominal, .before = pob_longitude)%>%
-  relocate(birthyear,LeadersGender, SandGender,PropertyValueSum, PropertyCount, .before = pob_longitude)%>%
+  relocate(log_aid, .before = birthyear) %>%
+  relocate(birthyear,LeadersGender, SandGender, SandName1,PropertyValueSum, PropertyCount, .before = pob_longitude)%>%
+  relocate(SandName1, .before = SandCountry)%>%
   select(-c(year_numeric))
 
 #summary(SLG)
-write.csv(SLG, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
-
+#write.csv(SLG, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+dubaidata <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
 Brokers <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Data input/Brokers.csv")
 
 library(stringdist)

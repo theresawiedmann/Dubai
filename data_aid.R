@@ -194,6 +194,8 @@ mla_collapsed <- select(mla_collapsed, -year_numeric)
 mla_collapsed <- mla_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
 mla_collapsed$LeadersName <- gsub("-", " ", mla_collapsed$LeadersName)
 
+
+
 write.csv(mla_collapsed, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Data_Aid_OECD_AidData.csv")
 rm(aiddata, merged, mla, mla_wide,mla_collapsed, aid)
 

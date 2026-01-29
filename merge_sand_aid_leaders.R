@@ -13,6 +13,12 @@ library(data.table)
 ###############################################
 # Merging Horizons Output into one data frame #
 ###############################################
+# Merger with aid from OECD and AidData (1966-2021)
+aidOA <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/Data_Aid_OECD_AidData.csv")
+
+# Merger with aid from GODAD (1995-2023)
+
+#aidG <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/Data_Aid_GODAD.csv")
 
 country_folders <- list.dirs(path = "C:/Users/wiedmann4/ownCloud/Aid and corruption_Dubai/Country's results",
                              full.names = TRUE, recursive = FALSE)
@@ -54,6 +60,11 @@ merged_data <- merged_data %>%
       str_to_lower(),       # minusc
     LeadersName = NA_character_ 
   )
+
+
+#######################
+# Long merge of names #
+#######################
 
 merged_data <- merged_data %>%
   relocate(SandName_clean, LeadersName, .before = DOB)
@@ -584,34 +595,16 @@ Sand <- merged_data %>%
   )) %>%
   filter(!is.na(LeadersName)) 
 
+#################################
+# To check when verifying names #
+#################################
+
 Sand_fullnames <- Sand %>%
   relocate(LeadersName, .before = SandVersion) %>%
   relocate(SandName_clean, .before = ADDRESS)
 
 #write.csv(Sand_fullnames, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Sand_fullnames.csv")
 
-# Sand <- Sand %>%
-#   mutate(SandID = case_when(
-#     # If all three are NA, just use "NA"
-#     is.na(PLOT_NUMBER) & is.na(FLAT_NUMBER) & is.na(ESTIMATED_VALUE) ~ "NA",
-#     # Otherwise, combine them with "NA" for missing values
-#     TRUE ~ paste(
-#       ifelse(is.na(PLOT_NUMBER), "NA", PLOT_NUMBER),
-#       ifelse(is.na(FLAT_NUMBER), "NA", FLAT_NUMBER),
-#       ifelse(is.na(ESTIMATED_VALUE), "NA", ESTIMATED_VALUE),
-#       sep = "-"
-#     )
-#   ))
-# Sand <- Sand %>% relocate(SandID, .before = DOB)
-
-# Sand <- Sand %>%
-#   group_by(LeadersName, LeadersCountry) %>%
-#   summarise(
-#     PropertyCount = n(),
-#     PropertyValueSum = sum(ESTIMATED_VALUE, na.rm = TRUE),
-#     across(everything(), first),
-#     .groups = "drop"
-#   )
 
 Sand <- Sand_fullnames %>%
   group_by(LeadersName, LeadersCountry) %>%
@@ -620,21 +613,21 @@ Sand <- Sand_fullnames %>%
     PropertyCount = n(),
     PropertyValueSum = sum(ESTIMATED_VALUE, na.rm = TRUE),
     across(c(-SandName, -SandName_num), first),
-    .groups = "drop"
-  ) %>%
-  # Pivot to create SandName1, SandName2, etc.
-  left_join(
-    Sand %>%
-      group_by(LeadersName, LeadersCountry) %>%
-      mutate(SandName_num = row_number()) %>%
-      select(LeadersName, LeadersCountry, SandName, SandName_num) %>%
-      pivot_wider(
-        names_from = SandName_num,
-        values_from = SandName,
-        names_prefix = "SandName"
-      ),
-    by = c("LeadersName", "LeadersCountry")
-  )
+    .groups = "drop")
+#   ) %>%
+#   # Pivot to create SandName1, SandName2, etc.
+#   left_join(
+#     Sand %>%
+#       group_by(LeadersName, LeadersCountry) %>%
+#       mutate(SandName_num = row_number()) %>%
+#       select(LeadersName, LeadersCountry, SandName, SandName_num) %>%
+#       pivot_wider(
+#         names_from = SandName_num,
+#         values_from = SandName,
+#         names_prefix = "SandName"
+#       ),
+#     by = c("LeadersName", "LeadersCountry")
+#   )
 
 Sand <- Sand %>% 
   relocate(PropertyCount, .before = DOB)%>%
@@ -656,7 +649,7 @@ Sand <- Sand %>%
 
 
 Missing <- Sand %>%
-  anti_join(mla_collapsed, by = c("LeadersCountry", "LeadersName"))
+  anti_join(aidOA, by = c("LeadersCountry", "LeadersName"))
 
 # some values came into the data set erroneously, we need to delete them manually. An explanation is given for each case
 # Abdul Ali, Bangladesh; Ali Haidar, Sudan; Ismail Khan, Morocco; Mohammed Aziz, Bangladesh; Murad Saeed, Syria; Pierre Andre, Haiti; Sheikh Abdul Aziz: there is no leader called as such
@@ -666,16 +659,19 @@ Sand <- Sand[-c(4, 65, 195, 312, 329, 361, 397), ]
 Sand[70, 1] = "Oumar Diallo"
 Sand[173, 1] = "Adel Ibrahim"
 
-SLG <- mla_collapsed %>%
+SLO <- aidOA %>%
   left_join(
     Sand %>% 
       mutate(SandDummy = 1),
     by = c("LeadersCountry", "LeadersName"),
-    suffix = c("_mla", "_sand")  # Add suffixes to overlapping columns
+    suffix = c("_aid", "_sand")  # Add suffixes to overlapping columns
   ) %>%
   mutate(SandDummy = replace_na(SandDummy, 0))
 
-SLG <- SLG %>%
+names(SLO)[names(SLO) == 'Total.Comm.Constant.inclCN'] <- 'comm.cn'
+names(SLO)[names(SLO) == 'Total.Disb.Constant'] <- 'disb'
+
+SLO <- SLO %>%
   relocate(SandGender, .before = positiona)%>%
   relocate(SandDummy, .before = tenure_period) %>%
   relocate(SandCountry, .before = country_isocode)%>%
@@ -683,13 +679,18 @@ SLG <- SLG %>%
   filter(!grepl("202[3-9]|20[3-9][0-9]", tenure_period))
 
 # create the log of comm and add 1 as log(0) is undefined. 
-SLG <- SLG %>%
-  mutate(log_aid = log(Aid.Constant + 1))
-SLG <- SLG %>% 
-  relocate(log_aid, .before = birthyear) %>%
-  relocate(birthyear,LeadersGender, SandGender, SandName1,PropertyValueSum, PropertyCount, .before = pob_longitude)%>%
-  relocate(SandName1, .before = SandCountry)%>%
-  select(-c(year_numeric))
+SLO <- SLO %>%
+  mutate(log_disb = log(disb + 1))%>%
+  mutate(log_comm.cn = log(comm.cn + 1))
+SLO <- SLO %>% 
+  relocate(log_comm.cn, log_disb, .before = birthyear) %>%
+  relocate(birthyear,LeadersGender, SandGender, SandName_clean,PropertyValueSum, PropertyCount, .before = pob_longitude)
 
-#summary(SLG)
-#write.csv(SLG, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+write.csv(SLO, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiDataOA.csv")
+
+SLO <- SLO %>%
+  filter(SandDummy == 1)
+
+#summary(SLO)
+write.csv(SLO, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiDataOA_matchesonly.csv")
+rm(datalist, merged_data, Missing, Sand, SLO, aidOA)
