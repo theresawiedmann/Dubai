@@ -32,17 +32,173 @@ relationships <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Data inp
 relationships <- select(relationships, -c(status, sourceID))
 
 DubaiDataAO <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiDataOA.csv")
+DubaiData <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
 
-library(stringr)
-
-relationships[, .(node_id_start, node_id_end, rel_type)]
+officers_names <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/ICIJmatches_officers_short.csv")
+names_to_keep <- officers_names$leader_name
+officers_filtered <- officers %>%
+  filter(name %in% names_to_keep)
 
 person_entity <- relationships %>%
   filter(rel_type %in% c("officer_of", "intermediary_of", "connected_to", "same_comapny_as", "same_intermediary_as", "similar_company_as", "probably_same_officer_as", "same_as", "same_id_as")) %>%
-  left_join(officers, by = c("node_id_start" = "node_id")) %>%
-  left_join(entities, by = c("node_id_end" = "node_id"))
+  inner_join(officers_filtered, by = c("node_id_start" = "node_id")) %>%
+  inner_join(entities, by = c("node_id_end" = "node_id"))
 
-person_entity <- subset(person_entity, select = -c(sourceID.y, sourceID.x, valid_until.y, valid_until.x, service_provider, country_code.x, country_code.y))
+
+# Convert all to character type first
+officers_filtered <- officers_filtered %>%
+  mutate(across(where(is.integer), as.character))
+
+relationships <- relationships %>%
+  mutate(across(where(is.integer), as.character))
+
+entities <- entities %>%
+  mutate(across(where(is.integer), as.character))
+
+intermediaries <- intermediaries %>%
+  mutate(across(where(is.integer), as.character))
+
+# Combine all people
+all_people <- bind_rows(
+  officers_filtered %>% select(node_id, name) %>% mutate(source = "officers"),
+  intermediaries %>% select(node_id, name) %>% mutate(source = "intermediaries")
+) %>%
+  filter(!is.na(name)) %>%
+  distinct(node_id, .keep_all = TRUE)
+
+# Create list to store results
+connections_list <- list()
+
+# Function to explore network and track paths
+explore_network_with_paths <- function(start_id, max_depth = 5) {
+  
+  visited_nodes <- character()
+  people_paths <- list()
+  current_layer <- data.frame(
+    node_id = start_id,
+    path = "",
+    depth = 0,
+    stringsAsFactors = FALSE
+  )
+  
+  for (depth in 1:max_depth) {
+    
+    if (nrow(current_layer) == 0) break
+    
+    next_layer <- data.frame()
+    
+    for (j in 1:nrow(current_layer)) {
+      
+      current_node <- current_layer$node_id[j]
+      current_path <- current_layer$path[j]
+      
+      if (current_node %in% visited_nodes) next
+      visited_nodes <- c(visited_nodes, current_node)
+      
+      # Find connections
+      connections <- relationships %>%
+        filter(node_id_start == current_node | node_id_end == current_node) %>%
+        mutate(
+          next_node = ifelse(node_id_start == current_node, node_id_end, node_id_start),
+          direction = ifelse(node_id_start == current_node, "outgoing", "incoming")
+        )
+      
+      if (nrow(connections) > 0) {
+        for (k in 1:nrow(connections)) {
+          
+          next_node_id <- connections$next_node[k]
+          rel_type <- connections$rel_type[k]
+          
+          if (next_node_id %in% visited_nodes) next
+          
+          # Build path
+          new_path <- ifelse(current_path == "", 
+                             rel_type, 
+                             paste0(current_path, " -> ", rel_type))
+          
+          # Check if this is a person
+          is_person <- next_node_id %in% all_people$node_id
+          
+          if (is_person && next_node_id != start_id) {
+            person_name <- all_people %>% 
+              filter(node_id == next_node_id) %>% 
+              pull(name) %>% 
+              head(1)
+            
+            people_paths[[next_node_id]] <- list(
+              node_id = next_node_id,
+              name = person_name,
+              path = new_path,
+              depth = depth
+            )
+          }
+          
+          # Add to next layer for exploration
+          next_layer <- bind_rows(
+            next_layer,
+            data.frame(
+              node_id = next_node_id,
+              path = new_path,
+              depth = depth,
+              stringsAsFactors = FALSE
+            )
+          )
+        }
+      }
+    }
+    
+    current_layer <- next_layer %>% distinct(node_id, .keep_all = TRUE)
+  }
+  
+  return(people_paths)
+}
+
+# Loop through each officer
+for (i in 1:nrow(officers_filtered)) {
+  
+  original_name <- officers_filtered$name[i]
+  original_id <- officers_filtered$node_id[i]
+  
+  cat("Processing:", original_name, "(", i, "of", nrow(officers_filtered), ")\n")
+  
+  # Explore network
+  people_paths <- explore_network_with_paths(original_id, max_depth = 5)
+  
+  if (length(people_paths) > 0) {
+    
+    # Extract names and paths
+    connected_names <- sapply(people_paths, function(x) x$name)
+    connection_paths <- sapply(people_paths, function(x) 
+      paste0(x$name, " (depth ", x$depth, ", via: ", x$path, ")"))
+    
+    connections_list[[i]] <- data.frame(
+      original_name = original_name,
+      original_node_id = original_id,
+      connected_names = paste(unique(connected_names), collapse = "; "),
+      connection_details = paste(connection_paths, collapse = " | "),
+      number_of_connections = length(unique(connected_names)),
+      stringsAsFactors = FALSE
+    )
+  } else {
+    connections_list[[i]] <- data.frame(
+      original_name = original_name,
+      original_node_id = original_id,
+      connected_names = "No connections found",
+      connection_details = "",
+      number_of_connections = 0,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# Combine all results
+wide_connections <- bind_rows(connections_list)
+
+# View results
+View(wide_connections)
+
+# View results
+View(wide_connections)
 
 oecd_countries <- c(
   "Australia", "Austria", "Belgium", "Canada", "Chile", "Colombia",
@@ -54,7 +210,7 @@ oecd_countries <- c(
   "Sweden", "Switzerland", "Turkey", "United Kingdom", "United States",
   "Saint Kitts and Nevis", "Hong Kong","British Virgin Islands","Jersey",
   "United Arab Emirates","Singapore","Guernsey", "Cayman Islands",
-  "Liechtenstein","Fiji"  
+  "Liechtenstein","Fiji","ok","Oman","Kuwait","Monaco"
 )
 
 # Filter out rows where countries.x matches any OECD country
@@ -223,3 +379,6 @@ if (!is.null(matches_df) && nrow(matches_df) > 0) {
 matches_df <- unique(matches_df)
 #write.csv(matches_df, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/ICIJmatches_officers.csv")
 officer_matches <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/ICIJmatches_officers.csv")
+
+
+
