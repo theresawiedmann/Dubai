@@ -6,6 +6,7 @@ library(countrycode)
 library(countries)
 library(tidyr)
 library(stringr)
+library(stringdist)
 library(readr)
 library(data.table)
 
@@ -31,174 +32,152 @@ others <- select(others, -c(sourceID, valid_until, note))
 relationships <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Data input/ICIJ/relationships.csv") 
 relationships <- select(relationships, -c(status, sourceID))
 
-DubaiDataAO <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiDataOA.csv")
-DubaiData <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
+ # DubaiDataAO <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiDataOA.csv")
+ # DubaiData <- fread("C:/Users/wiedmann4/Documents/Aid and corruption/Out/DubaiData.csv")
 
 officers_names <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/ICIJmatches_officers_short.csv")
 names_to_keep <- officers_names$leader_name
 officers_filtered <- officers %>%
   filter(name %in% names_to_keep)
 
-person_entity <- relationships %>%
-  filter(rel_type %in% c("officer_of", "intermediary_of", "connected_to", "same_comapny_as", "same_intermediary_as", "similar_company_as", "probably_same_officer_as", "same_as", "same_id_as")) %>%
-  inner_join(officers_filtered, by = c("node_id_start" = "node_id")) %>%
-  inner_join(entities, by = c("node_id_end" = "node_id"))
 
+# Find all officers sharing the same last name
+normalize_name <- function(x) {
+  x %>%
+    tolower() %>%
+    str_replace_all("[-_]", " ") %>%
+    str_replace_all("\\s+", " ") %>%
+    str_trim()
+}
 
-# Convert all to character type first
-officers_filtered <- officers_filtered %>%
-  mutate(across(where(is.integer), as.character))
+target_lastname <- "allawi"
+max_distance <- 1   # light fuzziness only
 
-relationships <- relationships %>%
-  mutate(across(where(is.integer), as.character))
+family_nodes <- officers %>%
+  mutate(
+    name_norm = normalize_name(name),
+    last_token = word(name_norm, -1)
+  ) %>%
+  filter(
+    stringdist::stringdist(last_token, target_lastname, method = "lv") <= max_distance
+  ) %>%
+  select(node_id, name)
 
-entities <- entities %>%
-  mutate(across(where(is.integer), as.character))
+family_nodes
 
-intermediaries <- intermediaries %>%
-  mutate(across(where(is.integer), as.character))
+start_nodes <- family_nodes$node_id
 
-# Combine all people
-all_people <- bind_rows(
-  officers_filtered %>% select(node_id, name) %>% mutate(source = "officers"),
-  intermediaries %>% select(node_id, name) %>% mutate(source = "intermediaries")
-) %>%
-  filter(!is.na(name)) %>%
-  distinct(node_id, .keep_all = TRUE)
-
-# Create list to store results
-connections_list <- list()
-
-# Function to explore network and track paths
-explore_network_with_paths <- function(start_id, max_depth = 5) {
+trace_network_with_family <- function(start_nodes,
+                                      relationships,
+                                      nodes_all,
+                                      max_depth = 6) {
   
-  visited_nodes <- character()
-  people_paths <- list()
-  current_layer <- data.frame(
-    node_id = start_id,
-    path = "",
-    depth = 0,
-    stringsAsFactors = FALSE
-  )
+  visited <- tibble(node_id = start_nodes$node_id)
+  frontier <- start_nodes %>%
+    mutate(depth = 0)
   
-  for (depth in 1:max_depth) {
+  results <- tibble()
+  
+  # Record family links explicitly
+  if (nrow(start_nodes) > 1) {
+    results <- bind_rows(
+      results,
+      tibble(
+        from_node = start_nodes$node_id[1],
+        to_node = start_nodes$node_id[-1],
+        depth = 0,
+        rel_type = "same_last_name"
+      ) %>%
+        left_join(nodes_all, by = c("to_node" = "node_id"))
+    )
+  }
+  
+  while (nrow(frontier) > 0) {
     
-    if (nrow(current_layer) == 0) break
+    current <- frontier[1, ]
+    frontier <- frontier[-1, ]
     
-    next_layer <- data.frame()
+    if (current$depth >= max_depth) next
     
-    for (j in 1:nrow(current_layer)) {
-      
-      current_node <- current_layer$node_id[j]
-      current_path <- current_layer$path[j]
-      
-      if (current_node %in% visited_nodes) next
-      visited_nodes <- c(visited_nodes, current_node)
-      
-      # Find connections
-      connections <- relationships %>%
-        filter(node_id_start == current_node | node_id_end == current_node) %>%
-        mutate(
-          next_node = ifelse(node_id_start == current_node, node_id_end, node_id_start),
-          direction = ifelse(node_id_start == current_node, "outgoing", "incoming")
+    links <- relationships %>%
+      filter(
+        node_id_start == current$node_id |
+          node_id_end == current$node_id
+      ) %>%
+      mutate(
+        next_node = if_else(
+          node_id_start == current$node_id,
+          node_id_end,
+          node_id_start
         )
+      )
+    
+    for (i in seq_len(nrow(links))) {
       
-      if (nrow(connections) > 0) {
-        for (k in 1:nrow(connections)) {
-          
-          next_node_id <- connections$next_node[k]
-          rel_type <- connections$rel_type[k]
-          
-          if (next_node_id %in% visited_nodes) next
-          
-          # Build path
-          new_path <- ifelse(current_path == "", 
-                             rel_type, 
-                             paste0(current_path, " -> ", rel_type))
-          
-          # Check if this is a person
-          is_person <- next_node_id %in% all_people$node_id
-          
-          if (is_person && next_node_id != start_id) {
-            person_name <- all_people %>% 
-              filter(node_id == next_node_id) %>% 
-              pull(name) %>% 
-              head(1)
-            
-            people_paths[[next_node_id]] <- list(
-              node_id = next_node_id,
-              name = person_name,
-              path = new_path,
-              depth = depth
-            )
-          }
-          
-          # Add to next layer for exploration
-          next_layer <- bind_rows(
-            next_layer,
-            data.frame(
-              node_id = next_node_id,
-              path = new_path,
-              depth = depth,
-              stringsAsFactors = FALSE
-            )
-          )
-        }
-      }
+      nid <- links$next_node[i]
+      
+      if (nid %in% visited$node_id) next
+      
+      visited <- bind_rows(visited, tibble(node_id = nid))
+      frontier <- bind_rows(
+        frontier,
+        tibble(node_id = nid, depth = current$depth + 1)
+      )
+      
+      node_info <- nodes_all %>%
+        filter(node_id == nid)
+      
+      results <- bind_rows(
+        results,
+        tibble(
+          from_node = current$node_id,
+          to_node = nid,
+          depth = current$depth + 1,
+          rel_type = links$rel_type[i]
+        ) %>%
+          left_join(node_info, by = c("to_node" = "node_id"))
+      )
     }
-    
-    current_layer <- next_layer %>% distinct(node_id, .keep_all = TRUE)
   }
   
-  return(people_paths)
+  results
 }
 
-# Loop through each officer
-for (i in 1:nrow(officers_filtered)) {
-  
-  original_name <- officers_filtered$name[i]
-  original_id <- officers_filtered$node_id[i]
-  
-  cat("Processing:", original_name, "(", i, "of", nrow(officers_filtered), ")\n")
-  
-  # Explore network
-  people_paths <- explore_network_with_paths(original_id, max_depth = 5)
-  
-  if (length(people_paths) > 0) {
-    
-    # Extract names and paths
-    connected_names <- sapply(people_paths, function(x) x$name)
-    connection_paths <- sapply(people_paths, function(x) 
-      paste0(x$name, " (depth ", x$depth, ", via: ", x$path, ")"))
-    
-    connections_list[[i]] <- data.frame(
-      original_name = original_name,
-      original_node_id = original_id,
-      connected_names = paste(unique(connected_names), collapse = "; "),
-      connection_details = paste(connection_paths, collapse = " | "),
-      number_of_connections = length(unique(connected_names)),
-      stringsAsFactors = FALSE
-    )
-  } else {
-    connections_list[[i]] <- data.frame(
-      original_name = original_name,
-      original_node_id = original_id,
-      connected_names = "No connections found",
-      connection_details = "",
-      number_of_connections = 0,
-      stringsAsFactors = FALSE
-    )
-  }
-}
+ali_family_network <- trace_network_with_family(
+  start_nodes = family_nodes,
+  relationships = relationships,
+  nodes_all = nodes_all,
+  max_depth = 3
+)
 
-# Combine all results
-wide_connections <- bind_rows(connections_list)
+ali_family_network %>%
+  arrange(depth) %>%
+  select(depth, name, type, rel_type)
 
-# View results
-View(wide_connections)
+ali_family_network <- ali_family_network %>%
+  filter(
+    type %in% c("officer", "intermediary"),
+    !is.na(name),
+    name != ""
+  )
 
-# View results
-View(wide_connections)
+Allawi_SC <- select(ali_family_network, "name")
+write.csv(Allawi_SC, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Allawi_SC.csv", row.names = F)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 oecd_countries <- c(
   "Australia", "Austria", "Belgium", "Canada", "Chile", "Colombia",
@@ -326,6 +305,7 @@ if (!is.null(matches_df) && nrow(matches_df) > 0) {
 matches_df <- unique(matches_df)
 
 write.csv(matches_df, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/ICIJmatches.csv")
+
 
 
 library(stringdist)
