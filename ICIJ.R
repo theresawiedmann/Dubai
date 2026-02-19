@@ -40,6 +40,31 @@ names_to_keep <- officers_names$leader_name
 officers_filtered <- officers %>%
   filter(name %in% names_to_keep)
 
+#######################
+# Test run Ali Allawi #
+#######################
+
+# Ensure all node_id columns are character type
+officers <- officers %>% mutate(node_id = as.character(node_id))
+intermediaries <- intermediaries %>% mutate(node_id = as.character(node_id))
+entities <- entities %>% mutate(node_id = as.character(node_id))
+relationships <- relationships %>%
+  mutate(
+    node_id_start = as.character(node_id_start),
+    node_id_end = as.character(node_id_end)
+  )
+
+# Create nodes_all by combining all node types
+nodes_all <- bind_rows(
+  officers %>% select(node_id, name) %>% mutate(type = "officer"),
+  intermediaries %>% select(node_id, name) %>% mutate(type = "intermediary"),
+  entities %>% select(node_id, name) %>% mutate(type = "entity")
+) %>%
+  filter(!is.na(name)) %>%
+  distinct(node_id, .keep_all = TRUE)
+
+cat("Created nodes_all with", nrow(nodes_all), "nodes\n")
+print(table(nodes_all$type))
 
 # Find all officers sharing the same last name
 normalize_name <- function(x) {
@@ -50,8 +75,10 @@ normalize_name <- function(x) {
     str_trim()
 }
 
+# run test for Ali Allawi
+
 target_lastname <- "allawi"
-max_distance <- 1   # light fuzziness only
+max_distance <- 1
 
 family_nodes <- officers %>%
   mutate(
@@ -59,37 +86,41 @@ family_nodes <- officers %>%
     last_token = word(name_norm, -1)
   ) %>%
   filter(
-    stringdist::stringdist(last_token, target_lastname, method = "lv") <= max_distance
+    stringdist(last_token, target_lastname, method = "lv") <= max_distance
   ) %>%
   select(node_id, name)
 
-family_nodes
+cat("\nFamily nodes found:\n")
+print(family_nodes)
 
-start_nodes <- family_nodes$node_id
-
+# Define the network tracing function
+# Note: start_nodes must be a dataframe with node_id and name columns
 trace_network_with_family <- function(start_nodes,
                                       relationships,
                                       nodes_all,
-                                      max_depth = 6) {
+                                      max_depth = 3) {
   
-  visited <- tibble(node_id = start_nodes$node_id)
+  # start_nodes is a dataframe, visited initialized from it
+  visited <- tibble(node_id = as.character(start_nodes$node_id))
   frontier <- start_nodes %>%
-    mutate(depth = 0)
+    mutate(
+      node_id = as.character(node_id),
+      depth = 0
+    )
   
   results <- tibble()
   
-  # Record family links explicitly
+  # Record family links explicitly (same last name connections)
   if (nrow(start_nodes) > 1) {
-    results <- bind_rows(
-      results,
-      tibble(
-        from_node = start_nodes$node_id[1],
-        to_node = start_nodes$node_id[-1],
-        depth = 0,
-        rel_type = "same_last_name"
-      ) %>%
-        left_join(nodes_all, by = c("to_node" = "node_id"))
-    )
+    family_links <- tibble(
+      from_node = start_nodes$node_id[1],
+      to_node = start_nodes$node_id[-1],
+      depth = 0,
+      rel_type = "same_last_name"
+    ) %>%
+      left_join(nodes_all, by = c("to_node" = "node_id"))
+    
+    results <- bind_rows(results, family_links)
   }
   
   while (nrow(frontier) > 0) {
@@ -112,6 +143,8 @@ trace_network_with_family <- function(start_nodes,
         )
       )
     
+    if (nrow(links) == 0) next
+    
     for (i in seq_len(nrow(links))) {
       
       nid <- links$next_node[i]
@@ -121,7 +154,7 @@ trace_network_with_family <- function(start_nodes,
       visited <- bind_rows(visited, tibble(node_id = nid))
       frontier <- bind_rows(
         frontier,
-        tibble(node_id = nid, depth = current$depth + 1)
+        tibble(node_id = nid, name = NA_character_, depth = current$depth + 1)
       )
       
       node_info <- nodes_all %>%
@@ -143,6 +176,7 @@ trace_network_with_family <- function(start_nodes,
   results
 }
 
+# Run the network trace
 ali_family_network <- trace_network_with_family(
   start_nodes = family_nodes,
   relationships = relationships,
@@ -150,25 +184,250 @@ ali_family_network <- trace_network_with_family(
   max_depth = 3
 )
 
+# Display full results
+cat("\nFull network results:\n")
 ali_family_network %>%
   arrange(depth) %>%
-  select(depth, name, type, rel_type)
+  select(depth, name, type, rel_type) %>%
+  print(n = 50)
 
-ali_family_network <- ali_family_network %>%
+# Filter to people only
+ali_family_network_people <- ali_family_network %>%
   filter(
     type %in% c("officer", "intermediary"),
     !is.na(name),
     name != ""
   )
 
-Allawi_SC <- select(ali_family_network, "name")
-write.csv(Allawi_SC, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Allawi_SC.csv", row.names = F)
+cat("\nPeople connected to Allawi family network:\n")
+ali_family_network_people %>%
+  arrange(depth) %>%
+  select(depth, name, type, rel_type) %>%
+  print(n = 50)
+
+write.csv(ali_family_network, "C:/Users/wiedmann4/Documents/Aid and corruption/Out/Ali2.csv")
 
 
+###############################################################################
+# Full run all names in officers_names (matches with political leaders, 100%) #
+###############################################################################
 
+# Function to extract last name
+extract_lastname <- function(name) {
+  name_norm <- normalize_name(name)
+  word(name_norm, -1)
+}
 
+# Define the network tracing function
+trace_network_with_family <- function(start_nodes,
+                                      relationships,
+                                      nodes_all,
+                                      max_depth = 3) {
+  
+  visited <- tibble(node_id = as.character(start_nodes$node_id))
+  frontier <- start_nodes %>%
+    mutate(
+      node_id = as.character(node_id),
+      depth = 0
+    )
+  
+  results <- tibble()
+  
+  # Record family links explicitly (same last name connections)
+  if (nrow(start_nodes) > 1) {
+    family_links <- tibble(
+      from_node = start_nodes$node_id[1],
+      to_node = start_nodes$node_id[-1],
+      depth = 0,
+      rel_type = "same_last_name"
+    ) %>%
+      left_join(nodes_all, by = c("to_node" = "node_id"))
+    
+    results <- bind_rows(results, family_links)
+  }
+  
+  while (nrow(frontier) > 0) {
+    
+    current <- frontier[1, ]
+    frontier <- frontier[-1, ]
+    
+    if (current$depth >= max_depth) next
+    
+    links <- relationships %>%
+      filter(
+        node_id_start == current$node_id |
+          node_id_end == current$node_id
+      ) %>%
+      mutate(
+        next_node = if_else(
+          node_id_start == current$node_id,
+          node_id_end,
+          node_id_start
+        )
+      )
+    
+    if (nrow(links) == 0) next
+    
+    for (i in seq_len(nrow(links))) {
+      
+      nid <- links$next_node[i]
+      
+      if (nid %in% visited$node_id) next
+      
+      visited <- bind_rows(visited, tibble(node_id = nid))
+      frontier <- bind_rows(
+        frontier,
+        tibble(node_id = nid, name = NA_character_, depth = current$depth + 1)
+      )
+      
+      node_info <- nodes_all %>%
+        filter(node_id == nid)
+      
+      results <- bind_rows(
+        results,
+        tibble(
+          from_node = current$node_id,
+          to_node = nid,
+          depth = current$depth + 1,
+          rel_type = links$rel_type[i]
+        ) %>%
+          left_join(node_info, by = c("to_node" = "node_id"))
+      )
+    }
+  }
+  
+  results
+}
 
+# Initialize list to store all results
+all_family_networks <- list()
+max_distance <- 1  # Fuzzy matching tolerance
 
+# Loop through each officer in officers_filtered
+for (i in 1:nrow(officers_filtered)) {
+  
+  original_name <- officers_filtered$name[i]
+  original_id <- officers_filtered$node_id[i]
+  
+  cat("\n========================================\n")
+  cat("Processing:", original_name, "(", i, "of", nrow(officers_filtered), ")\n")
+  cat("========================================\n")
+  
+  # Extract target lastname
+  target_lastname <- extract_lastname(original_name)
+  
+  cat("Target lastname:", target_lastname, "\n")
+  
+  # Find all officers with similar last name
+  family_nodes <- officers %>%
+    mutate(
+      name_norm = normalize_name(name),
+      last_token = word(name_norm, -1)
+    ) %>%
+    filter(
+      stringdist(last_token, target_lastname, method = "lv") <= max_distance
+    ) %>%
+    select(node_id, name)
+  
+  cat("Found", nrow(family_nodes), "family members with similar last name\n")
+  
+  if (nrow(family_nodes) == 0) {
+    cat("No family nodes found, skipping...\n")
+    next
+  }
+  
+  # Run the network trace
+  family_network <- trace_network_with_family(
+    start_nodes = family_nodes,
+    relationships = relationships,
+    nodes_all = nodes_all,
+    max_depth = 3
+  )
+  
+  # Filter to people only (officers and intermediaries)
+  family_network_people <- family_network %>%
+    filter(
+      type %in% c("officer", "intermediary"),
+      !is.na(name),
+      name != ""
+    )
+  
+  if (nrow(family_network_people) > 0) {
+    
+    # Extract unique connected names
+    connected_names <- unique(family_network_people$name)
+    
+    # Remove the original person and their family members from connections
+    family_member_names <- family_nodes$name
+    connected_names <- setdiff(connected_names, family_member_names)
+    
+    cat("Found", length(connected_names), "non-family connections\n")
+    
+    # Create connection details
+    connection_paths <- family_network_people %>%
+      filter(!name %in% family_member_names) %>%
+      mutate(
+        connection_detail = paste0(name, " (depth ", depth, ", via: ", rel_type, ")")
+      ) %>%
+      pull(connection_detail)
+    
+    # Store result
+    all_family_networks[[i]] <- data.frame(
+      original_name = original_name,
+      original_node_id = original_id,
+      family_size = nrow(family_nodes),
+      family_members = paste(family_nodes$name, collapse = "; "),
+      connected_names = paste(connected_names, collapse = "; "),
+      connection_details = paste(connection_paths, collapse = " | "),
+      number_of_connections = length(connected_names),
+      stringsAsFactors = FALSE
+    )
+    
+  } else {
+    
+    cat("No non-family connections found\n")
+    
+    all_family_networks[[i]] <- data.frame(
+      original_name = original_name,
+      original_node_id = original_id,
+      family_size = nrow(family_nodes),
+      family_members = paste(family_nodes$name, collapse = "; "),
+      connected_names = "No connections found",
+      connection_details = "",
+      number_of_connections = 0,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# Combine all results
+family_network_results <- bind_rows(all_family_networks)
+
+# Display summary
+cat("\n\n========================================\n")
+cat("FINAL SUMMARY\n")
+cat("========================================\n")
+cat("Total officers processed:", nrow(officers_filtered), "\n")
+cat("Officers with connections:", sum(family_network_results$number_of_connections > 0), "\n")
+cat("Total unique connections:", sum(family_network_results$number_of_connections), "\n\n")
+
+# Show top 10 officers by number of connections
+cat("Top 10 officers by number of connections:\n")
+family_network_results %>%
+  arrange(desc(number_of_connections)) %>%
+  select(original_name, family_size, number_of_connections) %>%
+  head(10) %>%
+  print()
+
+# Save results
+write.csv(family_network_results, 
+          "family_network_connections.csv", 
+          row.names = FALSE)
+
+cat("\n\nResults saved to: family_network_connections.csv\n")
+
+# View full results
+View(family_network_results)
 
 
 
@@ -192,16 +451,6 @@ oecd_countries <- c(
   "Liechtenstein","Fiji","ok","Oman","Kuwait","Monaco"
 )
 
-# Filter out rows where countries.x matches any OECD country
-person_entity <- person_entity[!person_entity$countries.x %in% oecd_countries, ]
-
-# Filter out rows where countries.x matches any OECD country
-person_entity <- person_entity[!person_entity$countries.y %in% oecd_countries, ]
-
-pe_intermediary <- relationships %>%
-  filter(rel_type %in% c("officer_of", "intermediary_of", "connected_to", "same_comapny_as", "same_intermediary_as", "similar_company_as", "probably_same_officer_as", "same_as", "same_id_as")) %>%
-  left_join(person_entity, by = c("node_id_start")) %>%
-  left_join(intermediaries, by = c("node_id_end2" = "node_id"))
 
 #######################################################
 # Check whether these names appear in the DubaiDataAO #
