@@ -40,10 +40,6 @@ names_to_keep <- officers_names$leader_name
 officers_filtered <- officers %>%
   filter(name %in% names_to_keep)
 
-#######################
-# Test run Ali Allawi #
-#######################
-
 # Ensure all node_id columns are character type
 officers <- officers %>% mutate(node_id = as.character(node_id))
 intermediaries <- intermediaries %>% mutate(node_id = as.character(node_id))
@@ -66,7 +62,7 @@ nodes_all <- bind_rows(
 cat("Created nodes_all with", nrow(nodes_all), "nodes\n")
 print(table(nodes_all$type))
 
-# Find all officers sharing the same last name
+# Function to normalize names
 normalize_name <- function(x) {
   x %>%
     tolower() %>%
@@ -75,23 +71,124 @@ normalize_name <- function(x) {
     str_trim()
 }
 
-# run test for Ali Allawi
-
-target_lastname <- "allawi"
 max_distance <- 1
 
-family_nodes <- officers %>%
+# Get all officers with their last names
+officers_with_lastnames <- officers_filtered %>%
   mutate(
     name_norm = normalize_name(name),
-    last_token = word(name_norm, -1)
+    lastname = word(name_norm, -1)
   ) %>%
-  filter(
-    stringdist(last_token, target_lastname, method = "lv") <= max_distance
-  ) %>%
-  select(node_id, name)
+  filter(!is.na(lastname), lastname != "")
 
-cat("\nFamily nodes found:\n")
-print(family_nodes)
+# Get unique last names
+unique_lastnames <- unique(officers_with_lastnames$lastname)
+
+cat("Found", length(unique_lastnames), "unique last names\n\n")
+
+# Initialize list to store all rows
+all_rows <- list()
+row_counter <- 0
+
+# Loop through each unique last name
+for (i in 1:length(unique_lastnames)) {
+  
+  target_lastname <- unique_lastnames[i]
+  
+  # Get all original names from officers_filtered with this lastname
+  original_names_with_lastname <- officers_with_lastnames %>%
+    filter(lastname == target_lastname)
+  
+  # Find all officers with similar last name (fuzzy matching) and their IDs
+  family_members <- officers %>%
+    mutate(
+      name_norm = normalize_name(name),
+      last_token = word(name_norm, -1)
+    ) %>%
+    filter(
+      stringdist(last_token, target_lastname, method = "lv") <= max_distance
+    ) %>%
+    select(node_id, name)
+  
+  # For each original name, create rows
+  for (j in 1:nrow(original_names_with_lastname)) {
+    
+    original_name <- original_names_with_lastname$name[j]
+    original_id <- original_names_with_lastname$node_id[j]
+    
+    # Get all family member IDs and names
+    family_ids <- paste(family_members$node_id, collapse = "; ")
+    family_names <- paste(family_members$name, collapse = "; ")
+    
+    row_counter <- row_counter + 1
+    
+    all_rows[[row_counter]] <- data.frame(
+      original_name = original_name,
+      original_node_id = original_id,
+      lastname = target_lastname,
+      family_size = nrow(family_members),
+      family_member_ids = family_ids,
+      family_member_names = family_names,
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+# Combine all rows
+family_list_df <- bind_rows(all_rows)
+
+# Save to CSV
+csv_filename <- "family_members_list.csv"
+write.csv(family_list_df, csv_filename, row.names = FALSE)
+
+cat("\nCSV saved to:", file.path(getwd(), csv_filename), "\n")
+cat("Total rows:", nrow(family_list_df), "\n")
+
+# Show preview
+cat("\nPreview of data:\n")
+print(head(family_list_df))
+
+# Also create a summary version (one row per lastname)
+summary_by_lastname <- family_list_df %>%
+  group_by(lastname) %>%
+  summarise(
+    num_original_officers = n(),
+    total_family_size = first(family_size),
+    example_names = paste(head(original_name, 3), collapse = ", ")
+  ) %>%
+  arrange(desc(total_family_size))
+
+summary_filename <- "family_members_summary.csv"
+write.csv(summary_by_lastname, summary_filename, row.names = FALSE)
+
+cat("\nSummary CSV saved to:", file.path(getwd(), summary_filename), "\n")
+
+
+
+
+# Combine all family nodes
+all_family_nodes_combined <- bind_rows(all_family_nodes)
+
+cat("\n\nTotal family nodes found across all last names:", nrow(all_family_nodes_combined), "\n")
+
+# Show summary by last name
+cat("\nSummary by last name:\n")
+summary_by_lastname <- all_family_nodes_combined %>%
+  group_by(target_lastname) %>%
+  summarise(
+    family_size = n(),
+    example_names = paste(head(name, 3), collapse = ", ")
+  ) %>%
+  arrange(desc(family_size))
+
+print(summary_by_lastname, n = 20)
+
+# Show specific example: Allawi family
+cat("\n\nExample - Allawi family nodes:\n")
+all_family_nodes_combined %>%
+  filter(target_lastname == "allawi") %>%
+  select(name, node_id) %>%
+  print()
 
 # Define the network tracing function
 # Note: start_nodes must be a dataframe with node_id and name columns
@@ -175,6 +272,8 @@ trace_network_with_family <- function(start_nodes,
   
   results
 }
+
+list <- res[["1"]]
 
 # Run the network trace
 ali_family_network <- trace_network_with_family(
