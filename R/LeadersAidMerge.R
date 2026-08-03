@@ -1,14 +1,3 @@
-setwd("C:/Users/wiedmann4/Dropbox/Aid and corruption")
-library(tidyverse)
-library(dplyr)
-#library(plyr)
-library(countrycode)
-library(countries)
-library(tidyr)
-library(stringr)
-library(readr)
-library(data.table)
-library(sf)
 
 #### Using the Paths to Power list to identify the political leaders ####
 
