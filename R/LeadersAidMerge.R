@@ -266,7 +266,6 @@ mla_collapsed <- mla_wide %>%
 
 mla_collapsed <- select(mla_collapsed, -year_numeric)
 
-
 #mla_collapsed <- select(mla_collapsed, -year)
 
 mla_collapsed <- mla_collapsed %>% relocate(LeadersCountry, country_isocode,  .after = LeadersName)
@@ -275,7 +274,6 @@ mla_collapsed$LeadersName <- gsub("-", " ", mla_collapsed$LeadersName)
 #write.csv(mla_collapsed, "C:/Users/wiedmann4/Dropbox/Aid and corruption/Temp/Data_Aid_OECD_AidData.csv")
 #Data_Aid_OECD_AidData <- read.csv("C:/Users/wiedmann4/Documents/Aid and corruption/Out/Data_Aid_OECD_AidData.csv")
 rm(aiddata, merged, mla, mla_wide,mla_collapsed, aid)
-
 
 #### Introduce GODAD datasets ####
 
